@@ -1,0 +1,21 @@
+{
+    "redis": {
+        "url": "clustercfg.tile-prod.aip5lk.apne1.cache.amazonaws.com:6379/0",
+        "tls": false
+    },
+    "mongodb": {
+        "url": "tile-prod.cluster-cdc64m6aau1e.ap-northeast-1.docdb.amazonaws.com:27017/?tls=true&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false",
+        "database": "tile_production_db",
+        "username": "tileadmin",
+        "password": "QsHcVvztdF3NGiz8hFDs",
+        "tlsCAFile": "/home/ubuntu/global-bundle.pem"
+    },
+    "migration": {
+        "checkIntervalMinutes": 2,
+        "expireHours": 6,
+        "batchSize": 100,
+        "workerCount": 0,
+        "maxConcurrency": 100,
+        "maxUsersPerRun": 80
+    }
+}

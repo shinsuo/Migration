@@ -1,15 +1,14 @@
 {
     "redis": {
-        "url": "redis://localhost:6379/0",
-        "host": "localhost",
-        "port": 6379,
-        "db": 0
+        "url": "localhost:6379/0",
+        "tls": false
     },
     "mongodb": {
-        "url": "mongodb://localhost:27017",
-        "host": "localhost",
-        "port": 27017,
-        "database": "tile_db"
+        "url": "localhost:27017",
+        "database": "tile_db",
+        "username": "",
+        "password": "",
+        "tlsCAFile": ""
     },
     "migration": {
         "checkIntervalMinutes": 2,

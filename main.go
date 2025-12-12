@@ -43,7 +43,7 @@ func main() {
 	log.Println("🚀 Starting Migration Service...")
 
 	// 读取命令行参数，默认为 config.json
-	configFile := "config.json"
+	configFile := "config/config.json"
 	if len(os.Args) > 1 {
 		configFile = os.Args[1]
 	}

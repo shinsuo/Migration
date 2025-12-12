@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,37 +24,36 @@ import (
 
 // Config 配置结构
 type Config struct {
-	Redis    RedisConfig    `json:"redis"`
-	MongoDB  MongoDBConfig  `json:"mongodb"`
+	Redis     RedisConfig     `json:"redis"`
+	MongoDB   MongoDBConfig   `json:"mongodb"`
 	Migration MigrationConfig `json:"migration"`
 }
 
 type RedisConfig struct {
-	URL  string `json:"url"`
-	Host string `json:"host"`
-	Port int    `json:"port"`
-	DB   int    `json:"db"`
+	URL string `json:"url"`
+	TLS bool   `json:"tls"`
 }
 
 type MongoDBConfig struct {
 	URL      string `json:"url"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
 	Database string `json:"database"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	TLSFile  string `json:"tlsFile"`
 }
 
 type MigrationConfig struct {
 	CheckIntervalMinutes int `json:"checkIntervalMinutes"`
-	ExpireHours         int `json:"expireHours"`
-	BatchSize           int `json:"batchSize"`
-	WorkerCount         int `json:"workerCount"`
-	MaxConcurrency      int `json:"maxConcurrency"`
-	MaxUsersPerRun      int `json:"maxUsersPerRun"`
+	ExpireHours          int `json:"expireHours"`
+	BatchSize            int `json:"batchSize"`
+	WorkerCount          int `json:"workerCount"`
+	MaxConcurrency       int `json:"maxConcurrency"`
+	MaxUsersPerRun       int `json:"maxUsersPerRun"`
 }
 
 // UserData 用户数据结构
 type UserData struct {
-	UserID      string    `bson:"userId" json:"userId"`
+	UserID string `bson:"userId" json:"userId"`
 	// Profile     Profile   `bson:"profile" json:"profile"`
 	CacheString string    `bson:"cacheString" json:"cacheString"`
 	AccessTime  time.Time `bson:"accessTime" json:"accessTime"`
@@ -84,8 +87,8 @@ type MigrationStats struct {
 
 // UserTask 用户任务
 type UserTask struct {
-	UserID      string
-	AccessTime  time.Time
+	UserID        string
+	AccessTime    time.Time
 	AccessTimeStr string
 }
 
@@ -107,10 +110,48 @@ func NewMigration(config Config) *Migration {
 	}
 }
 
+func getCustomTLSConfig(caFile string) (*tls.Config, error) {
+	tlsConfig := new(tls.Config)
+	certs, err := ioutil.ReadFile(caFile)
+
+	if err != nil {
+		return tlsConfig, err
+	}
+
+	tlsConfig.RootCAs = x509.NewCertPool()
+	ok := tlsConfig.RootCAs.AppendCertsFromPEM(certs)
+
+	if !ok {
+		return tlsConfig, errors.New("Failed parsing pem file")
+	}
+
+	return tlsConfig, nil
+}
+
 // Connect 连接数据库
 func (m *Migration) Connect() error {
 	// 连接 Redis
-	opt, err := redis.ParseURL(m.config.Redis.URL)
+	redisURL := m.config.Redis.URL
+	// 根据 TLS 配置决定使用 rediss:// 还是 redis:// 协议
+	if m.config.Redis.TLS {
+		// TLS 为 true 时使用 rediss:// 协议
+		if strings.HasPrefix(redisURL, "redis://") {
+			redisURL = strings.Replace(redisURL, "redis://", "rediss://", 1)
+		} else if !strings.HasPrefix(redisURL, "rediss://") {
+			// 如果 URL 没有协议前缀，添加 rediss://
+			redisURL = "rediss://" + redisURL
+		}
+	} else {
+		// TLS 为 false 时使用 redis:// 协议
+		if strings.HasPrefix(redisURL, "rediss://") {
+			redisURL = strings.Replace(redisURL, "rediss://", "redis://", 1)
+		} else if !strings.HasPrefix(redisURL, "redis://") {
+			// 如果 URL 没有协议前缀，添加 redis://
+			redisURL = "redis://" + redisURL
+		}
+	}
+
+	opt, err := redis.ParseURL(redisURL)
 	if err != nil {
 		return fmt.Errorf("failed to parse redis URL: %v", err)
 	}
@@ -124,7 +165,26 @@ func (m *Migration) Connect() error {
 	}
 
 	// 连接 MongoDB
-	clientOptions := options.Client().ApplyURI(m.config.MongoDB.URL)
+	// Path to the AWS CA file
+	caFilePath := m.config.MongoDB.TLSFile
+	username := m.config.MongoDB.Username
+	password := m.config.MongoDB.Password
+	clusterEndpoint := m.config.MongoDB.URL
+
+	connectionString := ""
+	if len(username) > 0 && len(password) > 0 {
+		connectionString = fmt.Sprintf("mongodb://%s:%s@%s", username, password, clusterEndpoint)
+	} else {
+		connectionString = fmt.Sprintf("mongodb://%s", clusterEndpoint)
+	}
+	clientOptions := options.Client().ApplyURI(connectionString)
+	if caFilePath != "" {
+		tlsConfig, err := getCustomTLSConfig(caFilePath)
+		if err != nil {
+			log.Fatalf("Failed getting TLS configuration: %v", err)
+		}
+		clientOptions = clientOptions.SetTLSConfig(tlsConfig)
+	}
 	m.mongoClient, err = mongo.Connect(context.TODO(), clientOptions)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mongodb: %v", err)
@@ -391,9 +451,9 @@ func (m *Migration) saveToMongoDB(ctx context.Context, userDataList []UserData) 
 			// 创建更新文档，不包含 _id 字段
 			updateDoc := bson.M{
 				"$set": bson.M{
-					"userId":      userData.UserID,
-					"accessTime":  userData.AccessTime,
-					"migratedAt":  userData.MigratedAt,
+					"userId":     userData.UserID,
+					"accessTime": userData.AccessTime,
+					"migratedAt": userData.MigratedAt,
 				},
 			}
 
@@ -410,11 +470,11 @@ func (m *Migration) saveToMongoDB(ctx context.Context, userDataList []UserData) 
 							setDoc[key] = m.convertNumbers(value)
 						}
 					}
-                    log.Printf("migrate user %s:%s", userData.UserID,userData.CacheString)
+					log.Printf("migrate user %s:%s", userData.UserID, userData.CacheString)
 				} else {
 					// 解析失败，存储为原始字符串
 					log.Printf("Warning: Failed to parse cache string for user %s: %v", userData.UserID, err)
-                    log.Printf("migrate failed user %s:%s", userData.UserID,userData.CacheString)
+					log.Printf("migrate failed user %s:%s", userData.UserID, userData.CacheString)
 					setDoc := updateDoc["$set"].(bson.M)
 					setDoc["cacheString"] = userData.CacheString
 				}
@@ -522,4 +582,3 @@ func loadConfig(filename string) (Config, error) {
 	err = json.Unmarshal(bytes, &config)
 	return config, err
 }
-
