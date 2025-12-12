@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 	"time"
 )
 
@@ -38,12 +39,17 @@ func (m *Migration) Start() {
 	}
 }
 
-
 func main() {
 	log.Println("🚀 Starting Migration Service...")
 
+	// 读取命令行参数，默认为 config.json
+	configFile := "config.json"
+	if len(os.Args) > 1 {
+		configFile = os.Args[1]
+	}
+
 	// 加载配置
-	config, err := loadConfig("config.json")
+	config, err := loadConfig(configFile)
 	if err != nil {
 		log.Fatalf("❌ Failed to load config: %v", err)
 	}
