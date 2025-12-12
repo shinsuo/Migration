@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+    migration:
+        build: .
+        container_name: migration-service
+        restart: unless-stopped
+        depends_on:
+            - redis
+            - mongodb
+        environment:
+            - REDIS_URL=redis://redis:6379/0
+            - MONGODB_URL=mongodb://mongodb:27017
+        volumes:
+            - ./config.json:/app/config.json:ro
+            - ./logs:/app/logs
+        networks:
+            - migration-network
+
+    redis:
+        image: redis:7-alpine
+        container_name: migration-redis
+        restart: unless-stopped
+        ports:
+            - '6379:6379'
+        volumes:
+            - redis-data:/data
+        networks:
+            - migration-network
+
+    mongodb:
+        image: mongo:7
+        container_name: migration-mongodb
+        restart: unless-stopped
+        ports:
+            - '27017:27017'
+        environment:
+            - MONGO_INITDB_ROOT_USERNAME=admin
+            - MONGO_INITDB_ROOT_PASSWORD=password
+            - MONGO_INITDB_DATABASE=app
+        volumes:
+            - mongodb-data:/data/db
+        networks:
+            - migration-network
+
+volumes:
+    redis-data:
+    mongodb-data:
+
+networks:
+    migration-network:
+        driver: bridge

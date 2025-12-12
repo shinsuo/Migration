@@ -1,0 +1,22 @@
+{
+    "redis": {
+        "url": "redis://localhost:6379/0",
+        "host": "localhost",
+        "port": 6379,
+        "db": 0
+    },
+    "mongodb": {
+        "url": "mongodb://localhost:27017",
+        "host": "localhost",
+        "port": 27017,
+        "database": "tile_db"
+    },
+    "migration": {
+        "checkIntervalMinutes": 2,
+        "expireHours": 6,
+        "batchSize": 100,
+        "workerCount": 0,
+        "maxConcurrency": 100,
+        "maxUsersPerRun": 80
+    }
+}
