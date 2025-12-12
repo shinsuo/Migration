@@ -1,7 +1,7 @@
 {
     "redis": {
         "url": "clustercfg.tile-prod.aip5lk.apne1.cache.amazonaws.com:6379/0",
-        "tls": false
+        "tls": true
     },
     "mongodb": {
         "url": "tile-prod.cluster-cdc64m6aau1e.ap-northeast-1.docdb.amazonaws.com:27017/?tls=true&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false",
