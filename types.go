@@ -69,11 +69,13 @@ type Profile struct {
 
 // Migration 迁移器
 type Migration struct {
-	redisClient *redis.Client
-	mongoClient *mongo.Client
-	config      Config
-	workerPool  chan struct{}
-	stats       *MigrationStats
+	redisClient  *redis.Client
+	redisCluster *redis.ClusterClient
+	isCluster    bool
+	mongoClient  *mongo.Client
+	config       Config
+	workerPool   chan struct{}
+	stats        *MigrationStats
 }
 
 // MigrationStats 迁移统计信息
@@ -132,6 +134,10 @@ func getCustomTLSConfig(caFile string) (*tls.Config, error) {
 func (m *Migration) Connect() error {
 	// 连接 Redis
 	redisURL := m.config.Redis.URL
+	// 检测是否是集群模式（AWS ElastiCache 集群配置端点包含 clustercfg）
+	isCluster := strings.Contains(redisURL, "clustercfg") || strings.Contains(redisURL, "cluster")
+	m.isCluster = isCluster
+
 	// 根据 TLS 配置决定使用 rediss:// 还是 redis:// 协议
 	if m.config.Redis.TLS {
 		// TLS 为 true 时使用 rediss:// 协议
@@ -151,17 +157,57 @@ func (m *Migration) Connect() error {
 		}
 	}
 
-	opt, err := redis.ParseURL(redisURL)
-	if err != nil {
-		return fmt.Errorf("failed to parse redis URL: %v", err)
-	}
-	m.redisClient = redis.NewClient(opt)
+	if isCluster {
+		// 集群模式：解析 URL 并构建集群选项
+		opt, err := redis.ParseURL(redisURL)
+		if err != nil {
+			return fmt.Errorf("failed to parse redis URL: %v", err)
+		}
 
-	// 测试 Redis 连接
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := m.redisClient.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("failed to connect to redis: %v", err)
+		// 从 URL 中提取主机地址（移除协议和路径部分）
+		host := opt.Addr
+		if host == "" {
+			// 如果没有解析出地址，从 URL 中提取
+			if strings.HasPrefix(redisURL, "rediss://") {
+				host = strings.TrimPrefix(redisURL, "rediss://")
+			} else if strings.HasPrefix(redisURL, "redis://") {
+				host = strings.TrimPrefix(redisURL, "redis://")
+			}
+			// 移除路径部分（如 /0）
+			if idx := strings.Index(host, "/"); idx != -1 {
+				host = host[:idx]
+			}
+		}
+
+		clusterOpt := &redis.ClusterOptions{
+			Addrs:     []string{host},
+			Username:  opt.Username,
+			Password:  opt.Password,
+			TLSConfig: opt.TLSConfig,
+		}
+
+		m.redisCluster = redis.NewClusterClient(clusterOpt)
+
+		// 测试 Redis 集群连接
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.redisCluster.Ping(ctx).Err(); err != nil {
+			return fmt.Errorf("failed to connect to redis cluster: %v", err)
+		}
+	} else {
+		// 单节点模式
+		opt, err := redis.ParseURL(redisURL)
+		if err != nil {
+			return fmt.Errorf("failed to parse redis URL: %v", err)
+		}
+		m.redisClient = redis.NewClient(opt)
+
+		// 测试 Redis 连接
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.redisClient.Ping(ctx).Err(); err != nil {
+			return fmt.Errorf("failed to connect to redis: %v", err)
+		}
 	}
 
 	// 连接 MongoDB
@@ -178,6 +224,7 @@ func (m *Migration) Connect() error {
 		connectionString = fmt.Sprintf("mongodb://%s", clusterEndpoint)
 	}
 	clientOptions := options.Client().ApplyURI(connectionString)
+	var err error
 	if caFilePath != "" {
 		tlsConfig, err := getCustomTLSConfig(caFilePath)
 		if err != nil {
@@ -201,7 +248,11 @@ func (m *Migration) Connect() error {
 
 // Close 关闭连接
 func (m *Migration) Close() error {
-	if m.redisClient != nil {
+	if m.isCluster && m.redisCluster != nil {
+		if err := m.redisCluster.Close(); err != nil {
+			return err
+		}
+	} else if m.redisClient != nil {
 		m.redisClient.Close()
 	}
 	if m.mongoClient != nil {
@@ -210,13 +261,21 @@ func (m *Migration) Close() error {
 	return nil
 }
 
+// getRedisClient 获取 Redis 客户端（统一接口）
+func (m *Migration) getRedisClient() redis.Cmdable {
+	if m.isCluster {
+		return m.redisCluster
+	}
+	return m.redisClient
+}
+
 // MigrateExpiredUsers 迁移过期用户 - 使用 goroutine 提升性能
 func (m *Migration) MigrateExpiredUsers() error {
 	startTime := time.Now()
 	ctx := context.Background()
 
 	// 获取所有访问时间数据
-	accessData, err := m.redisClient.HGetAll(ctx, "access").Result()
+	accessData, err := m.getRedisClient().HGetAll(ctx, "access").Result()
 	if err != nil {
 		return fmt.Errorf("failed to get access data from redis: %v", err)
 	}
@@ -418,7 +477,7 @@ func (m *Migration) getUserData(ctx context.Context, userID string, accessTime t
 	// }
 
 	// 获取用户缓存字符串
-	cacheStr, err := m.redisClient.Get(ctx, fmt.Sprintf("user:%s", userID)).Result()
+	cacheStr, err := m.getRedisClient().Get(ctx, fmt.Sprintf("user:%s", userID)).Result()
 	if err == nil {
 		userData.CacheString = cacheStr
 	}
@@ -543,7 +602,7 @@ func (m *Migration) removeFromRedis(ctx context.Context, userIDs []string) error
 		}
 
 		batch := userIDs[i:end]
-		pipe := m.redisClient.Pipeline()
+		pipe := m.getRedisClient().Pipeline()
 
 		for _, userID := range batch {
 			// 删除访问时间
