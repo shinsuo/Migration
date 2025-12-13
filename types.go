@@ -39,7 +39,7 @@ type MongoDBConfig struct {
 	Database string `json:"database"`
 	Username string `json:"username"`
 	Password string `json:"password"`
-	TLSFile  string `json:"tlsFile"`
+	TLSFile  string `json:"tlsCAFile"`
 }
 
 type MigrationConfig struct {
