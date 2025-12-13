@@ -1,0 +1,1 @@
+go build -o migration main.go types.go
