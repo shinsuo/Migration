@@ -1,0 +1,21 @@
+{
+    "redis": {
+        "url": "localhost:6379/1",
+        "tls": false
+    },
+    "mongodb": {
+        "url": "localhost:27017",
+        "database": "pot_db",
+        "username": "",
+        "password": "",
+        "tlsCAFile": ""
+    },
+    "migration": {
+        "checkIntervalMinutes": 2,
+        "expireHours": 6,
+        "batchSize": 100,
+        "workerCount": 0,
+        "maxConcurrency": 100,
+        "maxUsersPerRun": 80
+    }
+}
